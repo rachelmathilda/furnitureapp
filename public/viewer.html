@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8"/>
+<title>Morphara Builder</title>
+<script src="https://cdn.babylonjs.com/babylon.js"></script>
+<script src="https://cdn.babylonjs.com/serializers/babylon.glTF2Serializer.min.js"></script>
+<style>
+html,body{width:100%;height:100%;margin:0;overflow:hidden}
+canvas{width:100%;height:100%;touch-action:none}
+</style>
+</head>
+<body>
+<canvas id="renderCanvas"></canvas>
+
+<script>
+const canvas=document.getElementById("renderCanvas")
+const engine=new BABYLON.Engine(canvas,true)
+const scene=new BABYLON.Scene(engine)
+scene.clearColor=new BABYLON.Color3(0.96,0.94,0.92)
+
+const camera=new BABYLON.ArcRotateCamera("cam",-Math.PI/2,1.2,10,new BABYLON.Vector3(0,1,0),scene)
+camera.attachControl(canvas,true)
+camera.wheelPrecision = 60
+
+new BABYLON.HemisphericLight("light",new BABYLON.Vector3(0,1,0),scene)
+
+const ground=BABYLON.MeshBuilder.CreateGround("ground",{width:50,height:50},scene)
+const gmat=new BABYLON.StandardMaterial("gmat",scene)
+gmat.diffuseColor=new BABYLON.Color3(0.9,0.9,0.9)
+ground.material=gmat
+
+let sofa=BABYLON.MeshBuilder.CreateBox("sofa",{width:3,depth:1.5,height:1,updatable:true},scene)
+sofa.position.y=0.5
+
+const mat=new BABYLON.StandardMaterial("mat",scene)
+mat.diffuseColor=new BABYLON.Color3(0.77,0.44,0.36)
+sofa.material=mat
+
+let seat = sofa
+let backrest = null
+let leg1 = null
+let leg2 = null
+let leg3 = null
+let leg4 = null
+
+let activeMesh = sofa
+let brushRadius = 0.6
+let brushStrength = 0.15
+
+let positions=sofa.getVerticesData(BABYLON.VertexBuffer.PositionKind)
+let indices=sofa.getIndices()
+
+function updateMesh(){
+ if(!activeMesh) return
+ activeMesh.updateVerticesData(BABYLON.VertexBuffer.PositionKind,positions)
+ activeMesh.refreshBoundingInfo()
+}
+
+let handles=[]
+function createHandles(){
+ handles.forEach(h=>h.dispose())
+ handles=[]
+ if(!activeMesh) return
+
+ positions = activeMesh.getVerticesData(BABYLON.VertexBuffer.PositionKind)
+
+ for(let i=0;i<positions.length;i+=3){
+  const h=BABYLON.MeshBuilder.CreateSphere("h",{diameter:0.12},scene)
+  h.position=new BABYLON.Vector3(
+   positions[i],
+   positions[i+1],
+   positions[i+2]
+  ).add(activeMesh.position)
+
+  h.metadata={index:i}
+  const hm=new BABYLON.StandardMaterial("hm",scene)
+  hm.diffuseColor=new BABYLON.Color3(0.2,0.2,0.2)
+  h.material=hm
+  handles.push(h)
+ }
+}
+
+createHandles()
+
+let draggingHandle=null
+let currentMode="move"
+let lastX=0
+let lastY=0
+
+scene.onPointerObservable.add((pi)=>{
+ if(pi.type===BABYLON.PointerEventTypes.POINTERDOWN){
+  if(pi.pickInfo.hit){
+   const m=pi.pickInfo.pickedMesh
+   if(m && m.metadata && m.metadata.index!==undefined){
+    draggingHandle=m
+    lastY=scene.pointerY
+    lastX=scene.pointerX
+   }
+  }
+ }
+
+ if(pi.type===BABYLON.PointerEventTypes.POINTERUP){
+  draggingHandle=null
+ }
+
+ if(pi.type===BABYLON.PointerEventTypes.POINTERMOVE){
+  if(draggingHandle){
+   const dy=(scene.pointerY-lastY)*0.02
+   const dx=(scene.pointerX-lastX)*0.02
+   const idx=draggingHandle.metadata.index
+
+   if(currentMode==="sculpt"){
+    const origin = draggingHandle.position
+    for(let i=0;i<positions.length;i+=3){
+     const v = new BABYLON.Vector3(
+      positions[i],
+      positions[i+1],
+      positions[i+2]
+     ).add(activeMesh.position)
+
+     const dist = BABYLON.Vector3.Distance(v, origin)
+     if(dist < brushRadius){
+      const falloff = 1 - dist/brushRadius
+      positions[i+1] += dy * falloff * brushStrength * 5
+     }
+    }
+    activeMesh.updateVerticesData(BABYLON.VertexBuffer.PositionKind,positions)
+    activeMesh.refreshBoundingInfo()
+    createHandles()
+   }
+
+   if(currentMode==="move"){
+    activeMesh.position.x+=dx
+    activeMesh.position.z+=dy
+   }
+
+   if(currentMode==="resize"){
+    positions[idx]+=dx
+    positions[idx+2]+=dy
+    draggingHandle.position.x+=dx
+    draggingHandle.position.z+=dy
+   }
+
+   if(currentMode==="rotate"){
+    activeMesh.rotation.y += dx * 0.05
+   }
+
+   if(currentMode==="scale"){
+    activeMesh.scaling.x += dx * 0.05
+    activeMesh.scaling.z += dy * 0.05
+   }
+
+   updateMesh()
+   lastY=scene.pointerY
+   lastX=scene.pointerX
+  }
+
+  if(pi.pickInfo.hit && pi.pickInfo.pickedMesh?.metadata){
+   handles.forEach(h=>h.material.diffuseColor.set(0.3,0.3,0.3))
+   pi.pickInfo.pickedMesh.material.diffuseColor.set(0.9,0.4,0.3)
+  }
+ }
+})
+
+window.addEventListener("message",(e)=>{
+ const {type,value}=e.data
+
+ if(type==="mode") currentMode=value
+
+ if(type==="zoom"){
+  camera.radius-=value
+  if(camera.radius<3) camera.radius=3
+  if(camera.radius>25) camera.radius=25
+ }
+
+ if(type==="brush"){
+  brushRadius = value.radius
+  brushStrength = value.strength
+ }
+
+ if(type==="parts") showPartsOverlay()
+ if(type==="export") exportModel()
+ if(type==="save") saveLocal()
+
+ if(type==="resize"){
+  activeMesh.scaling.x=value.w/200
+  activeMesh.scaling.y=value.h/90
+  activeMesh.scaling.z=value.d/90
+ }
+
+ if(type==="color"){
+  mat.diffuseColor=BABYLON.Color3.FromHexString(value)
+ }
+
+ if(type==="rebuild"){
+  if(seat) seat.dispose()
+  if(backrest) backrest.dispose()
+  if(leg1) leg1.dispose()
+  if(leg2) leg2.dispose()
+  if(leg3) leg3.dispose()
+  if(leg4) leg4.dispose()
+  handles.forEach(h=>h.dispose())
+
+  seat = BABYLON.MeshBuilder.CreateBox("seat",{width:3,depth:1.5,height:0.4,updatable:true},scene)
+  seat.position.y = 0.2
+
+  backrest = BABYLON.MeshBuilder.CreateBox("backrest",{width:3,depth:0.3,height:0.8,updatable:true},scene)
+  backrest.position.y = 0.8
+  backrest.position.z = -0.6
+
+  leg1 = BABYLON.MeshBuilder.CreateBox("leg1",{width:0.2,depth:0.2,height:0.4},scene)
+  leg1.position.set(-1.3,0.2,-0.6)
+
+  leg2 = leg1.clone("leg2")
+  leg2.position.set(1.3,0.2,-0.6)
+
+  leg3 = leg1.clone("leg3")
+  leg3.position.set(-1.3,0.2,0.6)
+
+  leg4 = leg1.clone("leg4")
+  leg4.position.set(1.3,0.2,0.6)
+
+  ;[seat,backrest,leg1,leg2,leg3,leg4].forEach(m=>m.material=mat)
+
+  activeMesh = seat
+  positions = seat.getVerticesData(BABYLON.VertexBuffer.PositionKind)
+  indices = seat.getIndices()
+
+  createHandles()
+ }
+})
+
+engine.runRenderLoop(()=>scene.render())
+window.addEventListener("resize",()=>engine.resize())
+
+function getParts(){
+ return [
+  {name:"Seat", mesh: seat},
+  {name:"Backrest", mesh: backrest},
+  {name:"Legs", mesh: [leg1,leg2,leg3,leg4]}
+ ]
+}
+
+function showPartsOverlay(){
+ const parts = getParts()
+ let menu = "Select Part:\n\n"
+ parts.forEach((p,i)=> menu += `${i+1}. ${p.name}\n`)
+ const choice = prompt(menu)
+ if(!choice) return
+
+ const part = parts[parseInt(choice)-1]
+ if(!part) return
+
+ ;[seat,backrest,leg1,leg2,leg3,leg4].forEach(m=>{
+  if(m) m.outlineWidth = 0
+ })
+
+ if(Array.isArray(part.mesh)){
+  part.mesh.forEach(m=>{
+   if(m){
+    m.outlineWidth = 0.05
+    m.outlineColor = BABYLON.Color3.Yellow()
+   }
+  })
+ } else {
+  if(part.mesh){
+   part.mesh.outlineWidth = 0.05
+   part.mesh.outlineColor = BABYLON.Color3.Yellow()
+   activeMesh = part.mesh
+   createHandles()
+  }
+ }
+}
+
+async function exportModel(){
+ const glb=await BABYLON.GLTF2Export.GLBAsync(scene,"morphara")
+ glb.downloadFiles()
+}
+
+function saveLocal(){
+ const data={
+  positions,
+  color:activeMesh.material.diffuseColor.asArray()
+ }
+ localStorage.setItem("morphara_design",JSON.stringify(data))
+ alert("Design saved!")
+}
+</script>
+</body>
+</html>
