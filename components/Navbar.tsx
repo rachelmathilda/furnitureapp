@@ -1,39 +1,42 @@
-'use client'
-import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+"use client"
+
+import Link from "next/link"
+import { usePathname } from "next/navigation"
 
 export default function Navbar() {
   const pathname = usePathname()
 
   const linkClass = (path: string) =>
-    `relative px-1 transition ${
-      pathname === path
-        ? 'text-[#c46a57] font-semibold after:absolute after:-bottom-1 after:left-0 after:w-full after:h-[2px] after:bg-[#c46a57]'
-        : 'text-gray-700 hover:text-[#c46a57]'
+    `px-4 py-2 rounded-lg ${
+      pathname === path ? "bg-black text-white" : "hover:bg-gray-200"
     }`
 
   return (
-    <header className="sticky top-0 z-50 bg-[#f8f4f0]/90 backdrop-blur border-b border-black/5">
-      <div className="flex items-center justify-between px-10 py-5">
-        <Link href="/" className="text-2xl font-bold text-[#c46a57]">
+    <nav className="sticky top-0 z-50 bg-white border-b shadow-sm">
+      <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+        <Link
+          href="/"
+          className="text-2xl font-paytone"
+          style={{ color: "#C5705D" }}
+        >
           Morphara
         </Link>
 
-        <nav className="flex gap-8 text-sm">
-          <Link href="/" className={linkClass('/')}>
+        <div className="flex gap-2 items-center font-inter">
+          <Link href="/home" className={linkClass("/home")}>
             Home
           </Link>
-          <Link href="/catalog" className={linkClass('/catalog')}>
+          <Link href="/catalog" className={linkClass("/catalog")}>
             Catalog
           </Link>
-          <Link href="/custom" className={linkClass('/custom')}>
+          <Link href="/custom" className={linkClass("/custom")}>
             Custom
           </Link>
-          <Link href="/account" className={linkClass('/account')}>
-            Account
+          <Link href="/login" className={linkClass("/login")}>
+            Login
           </Link>
-        </nav>
+        </div>
       </div>
-    </header>
+    </nav>
   )
 }
