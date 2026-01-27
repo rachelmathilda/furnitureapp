@@ -1,291 +1,349 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="UTF-8"/>
-<title>Morphara Builder</title>
-<script src="https://cdn.babylonjs.com/babylon.js"></script>
-<script src="https://cdn.babylonjs.com/serializers/babylon.glTF2Serializer.min.js"></script>
+<meta charset="utf-8"/>
+<title>Morphara 3D Viewer</title>
 <style>
-html,body{width:100%;height:100%;margin:0;overflow:hidden}
-canvas{width:100%;height:100%;touch-action:none}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#111}
+canvas{display:block}
 </style>
 </head>
 <body>
-<canvas id="renderCanvas"></canvas>
+<canvas id="app"></canvas>
+<script src="https://unpkg.com/three@0.158.0/build/three.min.js"></script>
+<script src="https://unpkg.com/three@0.158.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.158.0/examples/js/exporters/GLTFExporter.js"></script>
 
 <script>
-const canvas=document.getElementById("renderCanvas")
-const engine=new BABYLON.Engine(canvas,true)
-const scene=new BABYLON.Scene(engine)
-scene.clearColor=new BABYLON.Color3(0.96,0.94,0.92)
+  console.log("THREE loaded:", typeof THREE)
+  console.log("Exporter:", typeof THREE.GLTFExporter, typeof GLTFExporter)
+</script>
 
-const camera=new BABYLON.ArcRotateCamera("cam",-Math.PI/2,1.2,10,new BABYLON.Vector3(0,1,0),scene)
-camera.attachControl(canvas,true)
-camera.wheelPrecision = 60
+<script>
+const canvas = document.getElementById("app")
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true })
+renderer.setSize(innerWidth, innerHeight)
+renderer.setPixelRatio(devicePixelRatio)
 
-new BABYLON.HemisphericLight("light",new BABYLON.Vector3(0,1,0),scene)
+const scene = new THREE.Scene()
+scene.background = new THREE.Color(0x111111)
 
-const ground=BABYLON.MeshBuilder.CreateGround("ground",{width:50,height:50},scene)
-const gmat=new BABYLON.StandardMaterial("gmat",scene)
-gmat.diffuseColor=new BABYLON.Color3(0.9,0.9,0.9)
-ground.material=gmat
+const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.1, 100)
+camera.position.set(0,2.8,6)
+camera.lookAt(0,1,0)
 
-let sofa=BABYLON.MeshBuilder.CreateBox("sofa",{width:3,depth:1.5,height:1,updatable:true},scene)
-sofa.position.y=0.5
+scene.add(new THREE.HemisphereLight(0xffffff,0x333333,1.1))
+const sun = new THREE.DirectionalLight(0xffffff,1.2)
+sun.position.set(4,10,6)
+scene.add(sun)
 
-const mat=new BABYLON.StandardMaterial("mat",scene)
-mat.diffuseColor=new BABYLON.Color3(0.77,0.44,0.36)
-sofa.material=mat
+const ground = new THREE.Mesh(
+ new THREE.PlaneGeometry(30,30),
+ new THREE.MeshStandardMaterial({ color:0x2a2a2a })
+)
+ground.rotation.x = -Math.PI/2
+ground.position.y = 0
+scene.add(ground)
 
-let seat = sofa
-let backrest = null
-let leg1 = null
-let leg2 = null
-let leg3 = null
-let leg4 = null
+let width=2.2, height=0.9, depth=1.4, armHeight=0.6
+let color = new THREE.Color("#c5705d")
 
-let activeMesh = sofa
-let brushRadius = 0.6
-let brushStrength = 0.15
+let seatMesh=null, backMesh=null, leftArm=null, rightArm=null
+let visible={ seat:true, back:true, arm:true }
 
-let positions=sofa.getVerticesData(BABYLON.VertexBuffer.PositionKind)
-let indices=sofa.getIndices()
+let mode="move"
+let isDragging=false
+let lastX=0,lastY=0
 
-function updateMesh(){
- if(!activeMesh) return
- activeMesh.updateVerticesData(BABYLON.VertexBuffer.PositionKind,positions)
- activeMesh.refreshBoundingInfo()
-}
-
-let handles=[]
-function createHandles(){
- handles.forEach(h=>h.dispose())
- handles=[]
- if(!activeMesh) return
-
- positions = activeMesh.getVerticesData(BABYLON.VertexBuffer.PositionKind)
-
- for(let i=0;i<positions.length;i+=3){
-  const h=BABYLON.MeshBuilder.CreateSphere("h",{diameter:0.12},scene)
-  h.position=new BABYLON.Vector3(
-   positions[i],
-   positions[i+1],
-   positions[i+2]
-  ).add(activeMesh.position)
-
-  h.metadata={index:i}
-  const hm=new BABYLON.StandardMaterial("hm",scene)
-  hm.diffuseColor=new BABYLON.Color3(0.2,0.2,0.2)
-  h.material=hm
-  handles.push(h)
+function roundedBox(w,h,d,r){
+ const g = new THREE.BoxGeometry(w,h,d,6,6,6)
+ const pos = g.attributes.position
+ const v = new THREE.Vector3()
+ for(let i=0;i<pos.count;i++){
+  v.fromBufferAttribute(pos,i)
+  v.x += Math.sign(v.x)*r
+  v.y += Math.sign(v.y)*r
+  v.z += Math.sign(v.z)*r
+  pos.setXYZ(i,v.x,v.y,v.z)
  }
+ return g
 }
 
-createHandles()
+function mat(){
+ return new THREE.MeshStandardMaterial({ color, roughness:0.55, metalness:0.08 })
+}
 
-let draggingHandle=null
-let currentMode="move"
-let lastX=0
-let lastY=0
-
-scene.onPointerObservable.add((pi)=>{
- if(pi.type===BABYLON.PointerEventTypes.POINTERDOWN){
-  if(pi.pickInfo.hit){
-   const m=pi.pickInfo.pickedMesh
-   if(m && m.metadata && m.metadata.index!==undefined){
-    draggingHandle=m
-    lastY=scene.pointerY
-    lastX=scene.pointerX
-   }
+function exportGLB(group){
+  const gltf = {
+    asset: { version: "2.0", generator: "MorpharaMiniExporter" },
+    scenes: [{ nodes: [] }],
+    nodes: [],
+    meshes: [],
+    buffers: [{ byteLength: 0 }],
+    bufferViews: [],
+    accessors: []
   }
- }
 
- if(pi.type===BABYLON.PointerEventTypes.POINTERUP){
-  draggingHandle=null
- }
+  let positions = []
+  let normals = []
+  let indices = []
+  let meshIndex = 0
 
- if(pi.type===BABYLON.PointerEventTypes.POINTERMOVE){
-  if(draggingHandle){
-   const dy=(scene.pointerY-lastY)*0.02
-   const dx=(scene.pointerX-lastX)*0.02
-   const idx=draggingHandle.metadata.index
+  group.traverse(obj=>{
+    if(!obj.isMesh) return
 
-   if(currentMode==="sculpt"){
-    const origin = draggingHandle.position
-    for(let i=0;i<positions.length;i+=3){
-     const v = new BABYLON.Vector3(
-      positions[i],
-      positions[i+1],
-      positions[i+2]
-     ).add(activeMesh.position)
+    const geo = obj.geometry.clone()
+    geo.applyMatrix4(obj.matrixWorld)
 
-     const dist = BABYLON.Vector3.Distance(v, origin)
-     if(dist < brushRadius){
-      const falloff = 1 - dist/brushRadius
-      positions[i+1] += dy * falloff * brushStrength * 5
-     }
+    const pos = geo.attributes.position.array
+    const nor = geo.attributes.normal.array
+
+    const indexOffset = positions.length / 3
+
+    for(let i=0;i<pos.length;i++) positions.push(pos[i])
+    for(let i=0;i<nor.length;i++) normals.push(nor[i])
+
+    if(geo.index){
+      const idx = geo.index.array
+      for(let i=0;i<idx.length;i++) indices.push(idx[i] + indexOffset)
+    }else{
+      for(let i=0;i<pos.length/3;i++) indices.push(indexOffset + i)
     }
-    activeMesh.updateVerticesData(BABYLON.VertexBuffer.PositionKind,positions)
-    activeMesh.refreshBoundingInfo()
-    createHandles()
-   }
 
-   if(currentMode==="move"){
-    activeMesh.position.x+=dx
-    activeMesh.position.z+=dy
-   }
+    const nodeIndex = gltf.nodes.length
+    const meshIdx = gltf.meshes.length
 
-   if(currentMode==="resize"){
-    positions[idx]+=dx
-    positions[idx+2]+=dy
-    draggingHandle.position.x+=dx
-    draggingHandle.position.z+=dy
-   }
+    gltf.nodes.push({ mesh: meshIdx })
+    gltf.scenes[0].nodes.push(nodeIndex)
 
-   if(currentMode==="rotate"){
-    activeMesh.rotation.y += dx * 0.05
-   }
+    gltf.meshes.push({
+      primitives: [{
+        attributes: { POSITION: 0, NORMAL: 1 },
+        indices: 2
+      }]
+    })
 
-   if(currentMode==="scale"){
-    activeMesh.scaling.x += dx * 0.05
-    activeMesh.scaling.z += dy * 0.05
-   }
+    meshIndex++
+  })
 
-   updateMesh()
-   lastY=scene.pointerY
-   lastX=scene.pointerX
-  }
+  const posBytes = new Float32Array(positions).buffer
+  const norBytes = new Float32Array(normals).buffer
+  const idxBytes = new Uint32Array(indices).buffer
 
-  if(pi.pickInfo.hit && pi.pickInfo.pickedMesh?.metadata){
-   handles.forEach(h=>h.material.diffuseColor.set(0.3,0.3,0.3))
-   pi.pickInfo.pickedMesh.material.diffuseColor.set(0.9,0.4,0.3)
-  }
+  let offset = 0
+
+  gltf.bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: posBytes.byteLength })
+  gltf.accessors.push({
+    bufferView: 0,
+    componentType: 5126,
+    count: positions.length/3,
+    type: "VEC3"
+  })
+  offset += posBytes.byteLength
+
+  gltf.bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: norBytes.byteLength })
+  gltf.accessors.push({
+    bufferView: 1,
+    componentType: 5126,
+    count: normals.length/3,
+    type: "VEC3"
+  })
+  offset += norBytes.byteLength
+
+  gltf.bufferViews.push({ buffer: 0, byteOffset: offset, byteLength: idxBytes.byteLength })
+  gltf.accessors.push({
+    bufferView: 2,
+    componentType: 5125,
+    count: indices.length,
+    type: "SCALAR"
+  })
+  offset += idxBytes.byteLength
+
+  const json = JSON.stringify(gltf)
+  const jsonBytes = new TextEncoder().encode(json)
+
+  const total = 12 + jsonBytes.byteLength + posBytes.byteLength + norBytes.byteLength + idxBytes.byteLength
+  const buffer = new ArrayBuffer(total)
+  const view = new DataView(buffer)
+
+  let ptr = 0
+  view.setUint32(ptr, 0x46546C67, true); ptr+=4
+  view.setUint32(ptr, 2, true); ptr+=4
+  view.setUint32(ptr, total, true); ptr+=4
+
+  view.setUint32(ptr, jsonBytes.byteLength, true); ptr+=4
+  view.setUint32(ptr, 0x4E4F534A, true); ptr+=4
+  new Uint8Array(buffer, ptr, jsonBytes.byteLength).set(jsonBytes)
+  ptr += jsonBytes.byteLength
+
+  view.setUint32(ptr, posBytes.byteLength + norBytes.byteLength + idxBytes.byteLength, true); ptr+=4
+  view.setUint32(ptr, 0x004E4942, true); ptr+=4
+  new Uint8Array(buffer, ptr, posBytes.byteLength).set(new Uint8Array(posBytes)); ptr+=posBytes.byteLength
+  new Uint8Array(buffer, ptr, norBytes.byteLength).set(new Uint8Array(norBytes)); ptr+=norBytes.byteLength
+  new Uint8Array(buffer, ptr, idxBytes.byteLength).set(new Uint8Array(idxBytes)); ptr+=idxBytes.byteLength
+
+  return buffer
+}
+
+
+function rebuildSofa(){
+ [seatMesh,backMesh,leftArm,rightArm].forEach(m=>m && scene.remove(m))
+
+ const seatH = height*0.35
+ const backH = height*0.55
+ const armW = width*0.12
+
+ seatMesh = new THREE.Mesh(
+  roundedBox(width*0.9, seatH, depth*0.9, 0.05),
+  mat()
+ )
+ seatMesh.position.set(0, seatH/2, 0)
+ seatMesh.visible = visible.seat
+ scene.add(seatMesh)
+
+ backMesh = new THREE.Mesh(
+  roundedBox(width*0.9, backH, depth*0.18, 0.05),
+  mat()
+ )
+ backMesh.position.set(0, seatH + backH/2 - 0.05, -depth/2 + depth*0.09)
+ backMesh.rotation.x = -0.15
+ backMesh.visible = visible.back
+ scene.add(backMesh)
+
+ leftArm = new THREE.Mesh(
+  roundedBox(armW, armHeight, depth*0.9, 0.05),
+  mat()
+ )
+ leftArm.position.set(-width/2 + armW/2, armHeight/2, 0)
+ leftArm.visible = visible.arm
+ scene.add(leftArm)
+
+ rightArm = leftArm.clone()
+ rightArm.position.x = width/2 - armW/2
+ rightArm.visible = visible.arm
+ scene.add(rightArm)
+}
+
+rebuildSofa()
+
+canvas.addEventListener("mousedown",e=>{
+ isDragging=true
+ lastX=e.clientX
+ lastY=e.clientY
+})
+
+window.addEventListener("mouseup",()=> isDragging=false)
+
+window.addEventListener("mousemove",e=>{
+ if(!isDragging) return
+
+ const dx = e.clientX-lastX
+ const dy = e.clientY-lastY
+ lastX=e.clientX
+ lastY=e.clientY
+
+ if(mode==="move"){
+  camera.position.x -= dx*0.01
+  camera.position.y += dy*0.01
+  camera.lookAt(0,1,0)
+ }
+
+ if(mode==="resize"){
+  width += dx*0.002
+  depth += dy*0.002
+  rebuildSofa()
+ }
+
+ if(mode==="sculpt" && seatMesh){
+  seatMesh.scale.y += dy*0.002
  }
 })
 
-window.addEventListener("message",(e)=>{
- const {type,value}=e.data
+window.addEventListener("message",e=>{
+ const {type,value}=e.data||{}
+ console.log("msg:",type,value)
 
- if(type==="mode") currentMode=value
+ if(type==="mode") mode=value
 
  if(type==="zoom"){
-  camera.radius-=value
-  if(camera.radius<3) camera.radius=3
-  if(camera.radius>25) camera.radius=25
- }
-
- if(type==="brush"){
-  brushRadius = value.radius
-  brushStrength = value.strength
- }
-
- if(type==="parts") showPartsOverlay()
- if(type==="export") exportModel()
- if(type==="save") saveLocal()
-
- if(type==="resize"){
-  activeMesh.scaling.x=value.w/200
-  activeMesh.scaling.y=value.h/90
-  activeMesh.scaling.z=value.d/90
+  camera.position.z -= value * 0.4
+  camera.position.z = Math.max(4, Math.min(25, camera.position.z))
  }
 
  if(type==="color"){
-  mat.diffuseColor=BABYLON.Color3.FromHexString(value)
+  color = new THREE.Color(value)
+  rebuildSofa()
  }
 
  if(type==="rebuild"){
-  if(seat) seat.dispose()
-  if(backrest) backrest.dispose()
-  if(leg1) leg1.dispose()
-  if(leg2) leg2.dispose()
-  if(leg3) leg3.dispose()
-  if(leg4) leg4.dispose()
-  handles.forEach(h=>h.dispose())
-
-  seat = BABYLON.MeshBuilder.CreateBox("seat",{width:3,depth:1.5,height:0.4,updatable:true},scene)
-  seat.position.y = 0.2
-
-  backrest = BABYLON.MeshBuilder.CreateBox("backrest",{width:3,depth:0.3,height:0.8,updatable:true},scene)
-  backrest.position.y = 0.8
-  backrest.position.z = -0.6
-
-  leg1 = BABYLON.MeshBuilder.CreateBox("leg1",{width:0.2,depth:0.2,height:0.4},scene)
-  leg1.position.set(-1.3,0.2,-0.6)
-
-  leg2 = leg1.clone("leg2")
-  leg2.position.set(1.3,0.2,-0.6)
-
-  leg3 = leg1.clone("leg3")
-  leg3.position.set(-1.3,0.2,0.6)
-
-  leg4 = leg1.clone("leg4")
-  leg4.position.set(1.3,0.2,0.6)
-
-  ;[seat,backrest,leg1,leg2,leg3,leg4].forEach(m=>m.material=mat)
-
-  activeMesh = seat
-  positions = seat.getVerticesData(BABYLON.VertexBuffer.PositionKind)
-  indices = seat.getIndices()
-
-  createHandles()
+  width=value.w/100
+  height=value.h/100
+  depth=value.d/100
+  rebuildSofa()
  }
+
+if(type==="parts"){
+  if(value==="seat") visible.seat=!visible.seat
+  if(value==="back") visible.back=!visible.back
+  if(value==="arm") visible.arm=!visible.arm
+  rebuildSofa()
+}
+
+ if(type==="export"){
+  const exportGroup = new THREE.Group()
+  exportGroup.add(seat.clone())
+  exportGroup.add(back.clone())
+  exportGroup.add(leftArm.clone())
+  exportGroup.add(rightArm.clone())
+  exportGroup.add(base.clone())
+
+  const glbBuffer = exportGLB(exportGroup)
+
+  const blob = new Blob([glbBuffer], { type: "model/gltf-binary" })
+  const url = URL.createObjectURL(blob)
+
+  const a = document.createElement("a")
+  a.href = url
+  a.download = "morphara_sofa.glb"
+  document.body.appendChild(a)
+  a.click()
+
+  setTimeout(()=>{
+    URL.revokeObjectURL(url)
+    document.body.removeChild(a)
+  },100)
+}
+
+ if(type==="save"){
+  const data={width,height,depth,color:color.getHexString()}
+  localStorage.setItem("morphara_design",JSON.stringify(data))
+  alert("Design saved!")
+ }
+
+  if(type==="copilot"){
+    if(value.includes("bigger")) width+=0.3
+    if(value.includes("smaller")) width-=0.3
+    if(value.includes("taller")) height+=0.2
+    if(value.includes("shorter")) height-=0.2
+    if(value.includes("deeper")) depth+=0.2
+    if(value.includes("red")) color=new THREE.Color("#b24b4b")
+    if(value.includes("blue")) color=new THREE.Color("#4b6bb2")
+    rebuildSofa()
+ }
+
 })
 
-engine.runRenderLoop(()=>scene.render())
-window.addEventListener("resize",()=>engine.resize())
-
-function getParts(){
- return [
-  {name:"Seat", mesh: seat},
-  {name:"Backrest", mesh: backrest},
-  {name:"Legs", mesh: [leg1,leg2,leg3,leg4]}
- ]
+function animate(){
+ requestAnimationFrame(animate)
+ renderer.render(scene,camera)
 }
+animate()
 
-function showPartsOverlay(){
- const parts = getParts()
- let menu = "Select Part:\n\n"
- parts.forEach((p,i)=> menu += `${i+1}. ${p.name}\n`)
- const choice = prompt(menu)
- if(!choice) return
-
- const part = parts[parseInt(choice)-1]
- if(!part) return
-
- ;[seat,backrest,leg1,leg2,leg3,leg4].forEach(m=>{
-  if(m) m.outlineWidth = 0
- })
-
- if(Array.isArray(part.mesh)){
-  part.mesh.forEach(m=>{
-   if(m){
-    m.outlineWidth = 0.05
-    m.outlineColor = BABYLON.Color3.Yellow()
-   }
-  })
- } else {
-  if(part.mesh){
-   part.mesh.outlineWidth = 0.05
-   part.mesh.outlineColor = BABYLON.Color3.Yellow()
-   activeMesh = part.mesh
-   createHandles()
-  }
- }
-}
-
-async function exportModel(){
- const glb=await BABYLON.GLTF2Export.GLBAsync(scene,"morphara")
- glb.downloadFiles()
-}
-
-function saveLocal(){
- const data={
-  positions,
-  color:activeMesh.material.diffuseColor.asArray()
- }
- localStorage.setItem("morphara_design",JSON.stringify(data))
- alert("Design saved!")
-}
+addEventListener("resize",()=>{
+ camera.aspect=innerWidth/innerHeight
+ camera.updateProjectionMatrix()
+ renderer.setSize(innerWidth,innerHeight)
+})
 </script>
 </body>
 </html>
