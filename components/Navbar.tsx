@@ -32,8 +32,8 @@ export default function Navbar() {
           <Link href="/custom" className={linkClass("/custom")}>
             Custom
           </Link>
-          <Link href="/login" className={linkClass("/login")}>
-            Login
+          <Link href="/account" className={linkClass("/account")}>
+            Account
           </Link>
         </div>
       </div>
