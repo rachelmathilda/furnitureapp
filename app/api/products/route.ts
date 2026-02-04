@@ -1,8 +1,8 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import dbConnect from '@/lib/mongodb'
 import Product from '@/models/Product'
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     console.log('GET /api/products start')
 
@@ -22,12 +22,12 @@ export async function GET() {
   }
 }
 
-export async function POST(req: Request) {
+export async function POST(request: NextRequest) {
   try {
     console.log('POST /api/products start')
 
     await dbConnect()
-    const body = await req.json()
+    const body = await request.json()
     console.log('Body:', body)
 
     const product = await Product.create(body)
